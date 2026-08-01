@@ -1,0 +1,34 @@
+From 7c8a0c6c4a8f0b1d7c2a8d3e2b6f0d8d5f4a1234 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.com>
+Date: Tue, 28 Jul 2026 00:00:00 +0000
+Subject: [PATCH] arch-r gcc: disable char8_t for bootstrap host C++ compile
+
+Arch-R bootstrap GCC 14.2.0 currently fails when built with the newer host
+compiler used in the Docker build environment because GCC's bootstrap helper
+library, libcody, still uses UTF-8 literals in places that are incompatible
+with the default C++20 char8_t behavior.
+
+Keep the fix local to gcc:bootstrap and gcc:host by forcing -fno-char8_t for
+the package's host C++ compile phase.
+---
+ projects/ArchR/packages/lang/gcc/package.mk | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/projects/ArchR/packages/lang/gcc/package.mk b/projects/ArchR/packages/lang/gcc/package.mk
+index 0000000..0000000 100644
+--- a/projects/ArchR/packages/lang/gcc/package.mk
++++ b/projects/ArchR/packages/lang/gcc/package.mk
+@@
++pre_configure_bootstrap() {
++  CXXFLAGS+=" -fno-char8_t"
++  export CXXFLAGS
++}
++
++pre_configure_host() {
++  CXXFLAGS+=" -fno-char8_t"
++  export CXXFLAGS
++}
++
+ PKG_NAME="gcc"
+ PKG_VERSION="14.2.0"
+ PKG_LICENSE="GPL-2.0-or-later"

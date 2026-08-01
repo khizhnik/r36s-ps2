@@ -1,0 +1,55 @@
+diff --git a/pcsx2-eerunner/Main.cpp b/pcsx2-eerunner/Main.cpp
+index 071a164d8d..14957367b4 100644
+--- a/pcsx2-eerunner/Main.cpp
++++ b/pcsx2-eerunner/Main.cpp
+@@ -149,8 +149,8 @@ struct SetOverride
+ 	std::string section, key, value;
+ };
+ static std::vector<SetOverride> s_set_overrides; // --set Section/Key=Value (repeatable)
++#ifdef PCSX2_RECOMPILER_TESTS
+ static u32 s_rec_fallback_groups = 0; // --rec-fallback <groups>: EE opcode groups forced to interp
+-#if defined(ARCH_ARM64)
+ static u32 s_rec_fallback_reg_masks[EERecFallback::kCop2MoveOpCount] = {~0u, ~0u, ~0u, ~0u}; // per-COP2-move-op register filters
+ #endif
+ 
+@@ -548,6 +548,7 @@ static void PrintCommandLineHelp(const char* progname)
+ 	std::fprintf(stderr, "  --localize / --repro: aliases of --stepdiff (the old jittery frame-boundary funnel was removed).\n");
+ 	std::fprintf(stderr, "  --selfcheck: Characterize run-to-run determinism (interp only). Expected to flag benign ~10-cycle\n");
+ 	std::fprintf(stderr, "               pause-point sampling jitter; use it to understand the noise floor, not as a gate.\n");
++#ifdef PCSX2_RECOMPILER_TESTS
+ 	std::fprintf(stderr, "  --rec-fallback <groups>: comma-separated EE opcode groups to force through the INTERPRETER\n");
+ 	std::fprintf(stderr, "               instead of native codegen, with everything else still JIT. Bisects \"the EE JIT\n");
+ 	std::fprintf(stderr, "               miscomputes something\" down to one emitter family without a rebuild per hypothesis:\n");
+@@ -556,6 +557,7 @@ static void PrintCommandLineHelp(const char* progname)
+ 	std::fprintf(stderr, "               cop2 narrows further into cop2move (QMFC2/CFC2/QMTC2/CTC2), cop2vu (the VU\n");
+ 	std::fprintf(stderr, "               macro ops) and cop2ls (LQC2/SQC2).\n");
+ 	std::fprintf(stderr, "               Pairs well with --mkstate --renderer sw for a visual oracle. arm64 only.\n");
++#endif
+ 	std::fprintf(stderr, "  --gsdump <path>[:<frames>]: with --liverun, record a .gs dump of the GIF stream (default 1\n");
+ 	std::fprintf(stderr, "               frame) starting after --gsdump-at frames (default 30, so the scene has settled).\n");
+ 	std::fprintf(stderr, "               Replaying that dump in pcsx2-gsrunner is the only honest way to A/B the GS across\n");
+@@ -777,6 +779,7 @@ bool EERunner::ParseCommandLineArgs(int argc, char* argv[], VMBootParameters& pa
+ 				s_set_overrides.push_back({kv.substr(0, slash), kv.substr(slash + 1, eq - slash - 1), kv.substr(eq + 1)});
+ 				continue;
+ 			}
++#ifdef PCSX2_RECOMPILER_TESTS
+ 			else if (CHECK_ARG_PARAM("--rec-fallback"))
+ 			{
+ 				const std::string_view list = StringUtil::StripWhitespace(argv[++i]);
+@@ -797,6 +800,7 @@ bool EERunner::ParseCommandLineArgs(int argc, char* argv[], VMBootParameters& pa
+ #endif
+ 				continue;
+ 			}
++#endif
+ 			else if (CHECK_ARG_PARAM("--renderer"))
+ 			{
+ 				const std::string_view r = StringUtil::StripWhitespace(argv[++i]);
+@@ -1088,7 +1092,7 @@ void EERunner::SettingsOverride()
+ 		Console.WriteLn(fmt::format("SettingsOverride: --set [{}] {} = {}", so.section, so.key, so.value));
+ 	}
+ 
+-#if defined(ARCH_ARM64)
++#ifdef PCSX2_RECOMPILER_TESTS
+ 	// --rec-fallback: route whole EE opcode groups through the interpreter. Not a
+ 	// setting (it lives in the recompiler, not EmuConfig), so it is applied here,
+ 	// before any block is compiled, and stays put for the whole run.

@@ -1,0 +1,10 @@
+diff --git a/Source/cmake.cxx b/Source/cmake.cxx
+--- a/Source/cmake.cxx
++++ b/Source/cmake.cxx
+@@ -133,7 +133,7 @@
+ // NOTE: the __linux__ macro is predefined on Android host too, but
+ // main CMakeLists.txt filters out this generator by host name.
+-#if (defined(__linux__) && !defined(__ANDROID__)) || defined(_WIN32)
++#if !defined(CMAKE_BOOTSTRAP) && ((defined(__linux__) && !defined(__ANDROID__)) || defined(_WIN32))
+ #  include "cmGlobalGhsMultiGenerator.h"
+ #endif

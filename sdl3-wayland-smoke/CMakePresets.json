@@ -1,0 +1,18 @@
+{
+  "version": 7,
+  "configurePresets": [
+    {
+      "name": "rk3326-clang",
+      "displayName": "RK3326 Arch-R Clang",
+      "description": "Cross-compile the SDL3 Wayland smoke app with the Arch-R RK3326 toolchain.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/rk3326-clang",
+      "environment": {
+        "ARCHR_SDK_ROOT": "/work/research/upstream/arch-r/build.ArchR-RK3326.aarch64"
+      },
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/../cmake/toolchains/archr-rk3326-aarch64-clang.cmake"
+      }
+    }
+  ]
+}

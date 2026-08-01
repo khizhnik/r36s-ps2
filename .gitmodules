@@ -1,0 +1,4 @@
+[submodule "upstream/armsx2"]
+	path = upstream/armsx2
+	url = https://github.com/ARMSX2/ARMSX2.git
+	branch = master
