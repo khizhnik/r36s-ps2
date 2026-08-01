@@ -1,0 +1,962 @@
+diff --git a/cmake/Pcsx2Utils.cmake b/cmake/Pcsx2Utils.cmake
+index dd02a69aa6..4bb552d41a 100644
+--- a/cmake/Pcsx2Utils.cmake
++++ b/cmake/Pcsx2Utils.cmake
+@@ -229,6 +229,13 @@ endfunction()
+ 
+ function(detect_page_size)
+ 	message(STATUS "Determining host page size")
++	# Allow cross-compile builds to skip the try_run by pre-setting HOST_PAGE_SIZE.
++	# This mirrors the Android/iOS helper paths and keeps Linux cross builds
++	# configure-friendly when the target page size is known from the platform ABI.
++	if(DEFINED HOST_PAGE_SIZE)
++		message(STATUS "Host page size (preset): ${HOST_PAGE_SIZE}")
++		return()
++	endif()
+ 	set(detect_page_size_file ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeTmp/src.c)
+ 	file(WRITE ${detect_page_size_file} "
+ #include <stdio.h>
+@@ -255,6 +262,12 @@ endfunction()
+ 
+ function(detect_cache_line_size)
+ 	message(STATUS "Determining host cache line size")
++	# Allow cross-compile builds to skip the try_run by pre-setting
++	# HOST_CACHE_LINE_SIZE.
++	if(DEFINED HOST_CACHE_LINE_SIZE)
++		message(STATUS "Host cache line size (preset): ${HOST_CACHE_LINE_SIZE}")
++		return()
++	endif()
+ 	set(detect_cache_line_size_file ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeTmp/src.c)
+ 	file(WRITE ${detect_cache_line_size_file} "
+ #include <stdio.h>
+diff --git a/cmake/SearchForStuff.cmake b/cmake/SearchForStuff.cmake
+index 4586dd6427..93abc7b970 100644
+--- a/cmake/SearchForStuff.cmake
++++ b/cmake/SearchForStuff.cmake
+@@ -42,6 +42,8 @@ else()
+ 		find_package(PCAP REQUIRED)
+ 	endif()
+ 	find_package(Vtune)
++	set(OPENSSL_USE_STATIC_LIBS OFF)
++	find_package(OpenSSL REQUIRED)
+ 
+ 	# Use bundled ffmpeg v4.x.x headers if we can't locate it in the system.
+ 	# We'll try to load it dynamically at runtime.
+diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
+index e2dd3de706..61ac5a6635 100644
+--- a/common/CMakeLists.txt
++++ b/common/CMakeLists.txt
+@@ -235,6 +235,10 @@ if(NOT WIN32 AND NOT ANDROID AND NOT IOS)
+ 	target_link_libraries(common PRIVATE
+ 		CURL::libcurl
+ 	)
++	target_link_libraries(common PUBLIC
++		OpenSSL::SSL
++		OpenSSL::Crypto
++	)
+ endif()
+ 
+ target_link_libraries(common PRIVATE
+diff --git a/common/SingleRegisterTypes.h b/common/SingleRegisterTypes.h
+index 576e619ef5..4a46e883fd 100644
+--- a/common/SingleRegisterTypes.h
++++ b/common/SingleRegisterTypes.h
+@@ -109,7 +109,7 @@ using r128 = uint32x4_t;
+ // No __vectorcall here: it is an x86-ism, and AAPCS64 already passes/returns
+ // 128-bit vectors in SIMD registers under the default calling convention. On
+ // aarch64-windows, clang-cl folds __vectorcall to an explicit default-CC
+-// (`cdecl`) attribute, which then conflicts with the preserve_most annotation
++// (`cdecl`) attribute, which then conflicts with the explicit bridge path
+ // on the vtlb r128 dispatchers (vtlb.h) — while changing nothing about how
+ // r128 is actually passed. (Elsewhere __vectorcall is #defined empty anyway.)
+ #define RETURNS_R128 r128
+diff --git a/pcsx2-eerunner/Main.cpp b/pcsx2-eerunner/Main.cpp
+index 071a164d8d..14957367b4 100644
+--- a/pcsx2-eerunner/Main.cpp
++++ b/pcsx2-eerunner/Main.cpp
+@@ -149,8 +149,8 @@ struct SetOverride
+ 	std::string section, key, value;
+ };
+ static std::vector<SetOverride> s_set_overrides; // --set Section/Key=Value (repeatable)
++#ifdef PCSX2_RECOMPILER_TESTS
+ static u32 s_rec_fallback_groups = 0; // --rec-fallback <groups>: EE opcode groups forced to interp
+-#if defined(ARCH_ARM64)
+ static u32 s_rec_fallback_reg_masks[EERecFallback::kCop2MoveOpCount] = {~0u, ~0u, ~0u, ~0u}; // per-COP2-move-op register filters
+ #endif
+ 
+@@ -548,6 +548,7 @@ static void PrintCommandLineHelp(const char* progname)
+ 	std::fprintf(stderr, "  --localize / --repro: aliases of --stepdiff (the old jittery frame-boundary funnel was removed).\n");
+ 	std::fprintf(stderr, "  --selfcheck: Characterize run-to-run determinism (interp only). Expected to flag benign ~10-cycle\n");
+ 	std::fprintf(stderr, "               pause-point sampling jitter; use it to understand the noise floor, not as a gate.\n");
++#ifdef PCSX2_RECOMPILER_TESTS
+ 	std::fprintf(stderr, "  --rec-fallback <groups>: comma-separated EE opcode groups to force through the INTERPRETER\n");
+ 	std::fprintf(stderr, "               instead of native codegen, with everything else still JIT. Bisects \"the EE JIT\n");
+ 	std::fprintf(stderr, "               miscomputes something\" down to one emitter family without a rebuild per hypothesis:\n");
+@@ -556,6 +557,7 @@ static void PrintCommandLineHelp(const char* progname)
+ 	std::fprintf(stderr, "               cop2 narrows further into cop2move (QMFC2/CFC2/QMTC2/CTC2), cop2vu (the VU\n");
+ 	std::fprintf(stderr, "               macro ops) and cop2ls (LQC2/SQC2).\n");
+ 	std::fprintf(stderr, "               Pairs well with --mkstate --renderer sw for a visual oracle. arm64 only.\n");
++#endif
+ 	std::fprintf(stderr, "  --gsdump <path>[:<frames>]: with --liverun, record a .gs dump of the GIF stream (default 1\n");
+ 	std::fprintf(stderr, "               frame) starting after --gsdump-at frames (default 30, so the scene has settled).\n");
+ 	std::fprintf(stderr, "               Replaying that dump in pcsx2-gsrunner is the only honest way to A/B the GS across\n");
+@@ -777,6 +779,7 @@ bool EERunner::ParseCommandLineArgs(int argc, char* argv[], VMBootParameters& pa
+ 				s_set_overrides.push_back({kv.substr(0, slash), kv.substr(slash + 1, eq - slash - 1), kv.substr(eq + 1)});
+ 				continue;
+ 			}
++#ifdef PCSX2_RECOMPILER_TESTS
+ 			else if (CHECK_ARG_PARAM("--rec-fallback"))
+ 			{
+ 				const std::string_view list = StringUtil::StripWhitespace(argv[++i]);
+@@ -797,6 +800,7 @@ bool EERunner::ParseCommandLineArgs(int argc, char* argv[], VMBootParameters& pa
+ #endif
+ 				continue;
+ 			}
++#endif
+ 			else if (CHECK_ARG_PARAM("--renderer"))
+ 			{
+ 				const std::string_view r = StringUtil::StripWhitespace(argv[++i]);
+@@ -1088,7 +1092,7 @@ void EERunner::SettingsOverride()
+ 		Console.WriteLn(fmt::format("SettingsOverride: --set [{}] {} = {}", so.section, so.key, so.value));
+ 	}
+ 
+-#if defined(ARCH_ARM64)
++#ifdef PCSX2_RECOMPILER_TESTS
+ 	// --rec-fallback: route whole EE opcode groups through the interpreter. Not a
+ 	// setting (it lives in the recompiler, not EmuConfig), so it is applied here,
+ 	// before any block is compiled, and stays put for the whole run.
+diff --git a/pcsx2-sdl/Main.cpp b/pcsx2-sdl/Main.cpp
+index 966f7a538f..614e7b9ba2 100644
+--- a/pcsx2-sdl/Main.cpp
++++ b/pcsx2-sdl/Main.cpp
+@@ -408,13 +408,24 @@ static bool BuildWaylandWindowInfo(WindowInfo& wi)
+ 
+ std::optional<WindowInfo> Pcsx2SDL::BuildWindowInfo()
+ {
++	Console.WriteLn("DIAG BuildWindowInfo: enter");
+ #if defined(WAYLAND_API)
+ 	if (WaylandSessionPresent())
+ 	{
++		Console.WriteLn("DIAG BuildWindowInfo: WaylandSessionPresent=true");
+ 		WindowInfo wl_wi;
+ 		if (BuildWaylandWindowInfo(wl_wi))
++		{
++			Console.WriteLnFmt("DIAG BuildWindowInfo: returning Wayland w={} h={} scale={}",
++				wl_wi.surface_width, wl_wi.surface_height, wl_wi.surface_scale);
+ 			return wl_wi;
++		}
+ 		// Fell through: no usable Wayland surface — try VK_KHR_display below.
++		Console.WriteLn("DIAG BuildWindowInfo: Wayland path failed, falling back to VulkanDirect");
++	}
++	else
++	{
++		Console.WriteLn("DIAG BuildWindowInfo: WaylandSessionPresent=false");
+ 	}
+ #endif
+ 
+@@ -426,6 +437,8 @@ std::optional<WindowInfo> Pcsx2SDL::BuildWindowInfo()
+ 	wi.display_connection = nullptr;
+ 	wi.window_handle = nullptr;
+ 	wi.surface_handle = nullptr;
++	Console.WriteLnFmt("DIAG BuildWindowInfo: returning VulkanDirect w={} h={} scale={}",
++		wi.surface_width, wi.surface_height, wi.surface_scale);
+ 	return wi;
+ }
+ 
+@@ -538,7 +551,10 @@ void Host::SetMouseLock(bool state)
+ 
+ std::optional<WindowInfo> Host::AcquireRenderWindow(bool recreate_window)
+ {
+-	return Pcsx2SDL::BuildWindowInfo();
++	Console.WriteLnFmt("DIAG Host::AcquireRenderWindow: enter recreate_window={}", recreate_window ? 1 : 0);
++	const std::optional<WindowInfo> wi = Pcsx2SDL::BuildWindowInfo();
++	Console.WriteLnFmt("DIAG Host::AcquireRenderWindow: exit has_window={}", wi.has_value() ? 1 : 0);
++	return wi;
+ }
+ 
+ void Host::ReleaseRenderWindow()
+@@ -835,6 +851,8 @@ void Pcsx2SDL::CPUThreadMain(VMBootParameters initial_params, bool start_in_fsui
+ {
+ 	ret->store(EXIT_FAILURE);
+ 	s_cpu_thread_id.store(std::this_thread::get_id(), std::memory_order_release);
++	Console.WriteLnFmt("DIAG CPUThreadMain: enter start_in_fsui={} iso='{}' state='{}'",
++		start_in_fsui ? 1 : 0, initial_params.filename, initial_params.save_state);
+ 
+ 	if (!VMManager::Internal::CPUThreadInitialize())
+ 	{
+@@ -861,13 +879,16 @@ void Pcsx2SDL::CPUThreadMain(VMBootParameters initial_params, bool start_in_fsui
+ 	// visible before the user selects a game.
+ 	if (start_in_fsui)
+ 	{
++		Console.WriteLn("DIAG CPUThreadMain: InitializeFullscreenUI");
+ 		ImGuiManager::InitializeFullscreenUI();
++		Console.WriteLn("DIAG CPUThreadMain: MTGS::WaitForOpen enter");
+ 		if (!MTGS::WaitForOpen())
+ 		{
+ 			Console.Error("Failed to open MTGS for FullscreenUI startup.");
+ 			VMManager::Internal::CPUThreadShutdown();
+ 			return;
+ 		}
++		Console.WriteLn("DIAG CPUThreadMain: MTGS::WaitForOpen exit success");
+ 		MTGS::SetRunIdle(true);
+ 	}
+ 
+@@ -981,6 +1002,7 @@ void Pcsx2SDL::CPUThreadMain(VMBootParameters initial_params, bool start_in_fsui
+ 
+ int main(int argc, char* argv[])
+ {
++	std::fprintf(stderr, "DIAG main: enter argc=%d\n", argc);
+ 	// Short-circuit --help/--version before any heavyweight init so they
+ 	// work even on a system where the resources dir hasn't been laid down.
+ 	for (int i = 1; i < argc; i++)
+@@ -1007,6 +1029,7 @@ int main(int argc, char* argv[])
+ 
+ 	CrashHandler::Install();
+ 	Log::SetConsoleOutputLevel(LOGLEVEL_INFO);
++	Console.WriteLn("DIAG main: after log init");
+ 
+ 	if (!Pcsx2SDL::InitializeConfig())
+ 	{
+@@ -1017,6 +1040,11 @@ int main(int argc, char* argv[])
+ 	VMBootParameters params;
+ 	if (!Pcsx2SDL::ParseCommandLineArgs(argc, argv, params))
+ 		return EXIT_FAILURE;
++	Console.WriteLnFmt("DIAG main: after ParseCommandLineArgs iso='{}' state='{}' source_type={} fast_boot={} fullscreen={}",
++		params.filename, params.save_state,
++		params.source_type.has_value() ? static_cast<int>(params.source_type.value()) : -1,
++		params.fast_boot.has_value() ? (params.fast_boot.value() ? 1 : 0) : -1,
++		params.fullscreen.has_value() ? (params.fullscreen.value() ? 1 : 0) : -1);
+ 
+ 	const bool have_boot_target = !params.filename.empty() || params.source_type.has_value();
+ 	bool start_in_fsui = false;
+@@ -1036,11 +1064,14 @@ int main(int argc, char* argv[])
+ 			return EXIT_FAILURE;
+ 		}
+ 	}
++	Console.WriteLnFmt("DIAG main: start_in_fsui={}", start_in_fsui ? 1 : 0);
+ 
+ 	Pcsx2SDL::InstallSignalHandler();
+ 	SysMemory::ReserveMemory();
++	Console.WriteLn("DIAG main: SysMemory::ReserveMemory complete");
+ 
+ 	std::atomic<int> thread_ret{EXIT_FAILURE};
++	Console.WriteLn("DIAG main: starting CPU thread");
+ 	std::thread cpu_thread([&]() {
+ 		Pcsx2SDL::CPUThreadMain(std::move(params), start_in_fsui, &thread_ret);
+ 	});
+@@ -1048,6 +1079,7 @@ int main(int argc, char* argv[])
+ 	// VK_KHR_display has no host event loop; SDL3 input pumping happens
+ 	// inside InputManager on the CPU thread; signals are async. The main
+ 	// thread just waits for shutdown.
++	Console.WriteLn("DIAG main: joining CPU thread");
+ 	cpu_thread.join();
+ 
+ #if defined(WAYLAND_API)
+diff --git a/pcsx2/CMakeLists.txt b/pcsx2/CMakeLists.txt
+index 2db1727f8e..ef2d91f914 100644
+--- a/pcsx2/CMakeLists.txt
++++ b/pcsx2/CMakeLists.txt
+@@ -1119,6 +1119,7 @@ set(pcsx2arm64Sources
+ 	arm64/iR5900MultDiv-arm64.cpp
+ 	arm64/iR5900Shift-arm64.cpp
+ 	arm64/iR5900Misc-arm64.cpp
++	arm64/VTLBBridge.cpp
+ 	arm64/iCOP2-arm64.cpp
+ 	arm64/iCOP0-arm64.cpp
+ 	arm64/iFPU-arm64.cpp
+diff --git a/pcsx2/GS/GS.cpp b/pcsx2/GS/GS.cpp
+index 28304c8340..9fbced8d3a 100644
+--- a/pcsx2/GS/GS.cpp
++++ b/pcsx2/GS/GS.cpp
+@@ -120,7 +120,14 @@ static RenderAPI GetAPIForRenderer(GSRendererType renderer)
+ static bool OpenGSDevice(GSRendererType renderer, bool clear_state_on_fail, bool recreate_window,
+ 	GSVSyncMode vsync_mode, bool allow_present_throttle)
+ {
++	Console.WriteLnFmt("DIAG OpenGSDevice: enter renderer={} clear_state_on_fail={} recreate_window={} vsync_mode={} allow_present_throttle={}",
++		Pcsx2Config::GSOptions::GetRendererName(renderer),
++		clear_state_on_fail ? 1 : 0,
++		recreate_window ? 1 : 0,
++		static_cast<int>(vsync_mode),
++		allow_present_throttle ? 1 : 0);
+ 	const RenderAPI new_api = GetAPIForRenderer(renderer);
++	Console.WriteLnFmt("DIAG OpenGSDevice: selected RenderAPI={}", GSDevice::RenderAPIToString(new_api));
+ 	switch (new_api)
+ 	{
+ 		case RenderAPI::None:
+@@ -156,10 +163,14 @@ static bool OpenGSDevice(GSRendererType renderer, bool clear_state_on_fail, bool
+ 			Console.Error("Unsupported render API %s", GSDevice::RenderAPIToString(new_api));
+ 			return false;
+ 	}
++	Console.WriteLnFmt("DIAG OpenGSDevice: constructed device type={}", GSDevice::RenderAPIToString(new_api));
+ 
++	Console.WriteLn("DIAG OpenGSDevice: calling g_gs_device->Create");
+ 	bool okay = g_gs_device->Create(vsync_mode, allow_present_throttle);
++	Console.WriteLnFmt("DIAG OpenGSDevice: g_gs_device->Create returned {}", okay ? 1 : 0);
+ 	if (okay)
+ 	{
++		Console.WriteLn("DIAG OpenGSDevice: calling ImGuiManager::Initialize");
+ 		okay = ImGuiManager::Initialize();
+ 		if (!okay)
+ 			Console.Error("Failed to initialize ImGuiManager");
+@@ -454,17 +465,26 @@ bool GSopen(const Pcsx2Config::GSOptions& config, GSRendererType renderer, u8* b
+ 	GSVSyncMode vsync_mode, bool allow_present_throttle)
+ {
+ 	GSConfig = config;
++	Console.WriteLn("DIAG GSopen: enter");
++
++	Console.WriteLn("DIAG GS requested renderer: %s", Pcsx2Config::GSOptions::GetRendererName(config.Renderer));
+ 
+ 	if (renderer == GSRendererType::Auto)
+ 		renderer = GSUtil::GetPreferredRenderer();
+ 
++	Console.WriteLn("DIAG GS selected renderer: %s", Pcsx2Config::GSOptions::GetRendererName(renderer));
++
++	Console.WriteLn("DIAG GSopen: calling OpenGSDevice");
+ 	bool res = OpenGSDevice(renderer, true, false, vsync_mode, allow_present_throttle);
++	Console.WriteLnFmt("DIAG GSopen: OpenGSDevice returned {}", res ? 1 : 0);
+ 	if (res)
+ 	{
+ #ifdef __ANDROID__
+ 		ApplyAndroidGameDBOverrides();
+ #endif
++		Console.WriteLn("DIAG GSopen: calling OpenGSRenderer");
+ 		res = OpenGSRenderer(renderer, basemem);
++		Console.WriteLnFmt("DIAG GSopen: OpenGSRenderer returned {}", res ? 1 : 0);
+ 		if (!res)
+ 			CloseGSDevice(true);
+ 	}
+@@ -478,6 +498,11 @@ bool GSopen(const Pcsx2Config::GSOptions& config, GSRendererType renderer, u8* b
+ 		return false;
+ 	}
+ 
++	Console.WriteLn("DIAG GS created renderer: %s", Pcsx2Config::GSOptions::GetRendererName(GSCurrentRenderer));
++	Console.WriteLn("DIAG GS host API: %s", GSDevice::RenderAPIToString(g_gs_device->GetRenderAPI()));
++	Console.WriteLn("DIAG GS host device: %s", g_gs_device->GetDriverInfo().c_str());
++	Console.WriteLn("DIAG GSopen: exit success");
++
+ 	return true;
+ }
+ 
+diff --git a/pcsx2/GS/Renderers/Common/GSRenderer.cpp b/pcsx2/GS/Renderers/Common/GSRenderer.cpp
+index fbf79a124f..f8857cfbf8 100644
+--- a/pcsx2/GS/Renderers/Common/GSRenderer.cpp
++++ b/pcsx2/GS/Renderers/Common/GSRenderer.cpp
+@@ -671,6 +671,20 @@ void GSRenderer::ExecVsyncRecord(const GSBackQueue::VsyncRecord& rec)
+ 
+ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
+ {
++	static bool s_diag_first_vsync_logged = false;
++	static bool s_diag_current_null_logged = false;
++	static bool s_diag_current_nonnull_logged = false;
++	static bool s_diag_snapshot_queued = false;
++	static constexpr const char* s_diag_snapshot_path =
++		"/storage/ports/pcsx2-eerunner-smoke/debug/first-render.png";
++
++	if (!s_diag_first_vsync_logged)
++	{
++		Console.WriteLn("DIAG GS first VSync: field=%u registers_written=%u idle_frame=%u",
++			field, static_cast<unsigned>(registers_written), static_cast<unsigned>(idle_frame));
++		s_diag_first_vsync_logged = true;
++	}
++
+ 	if (GSConfig.ShouldDump(s_n, g_perfmon.GetFrame()))
+ 	{
+ 		if (GSConfig.SaveInfo)
+@@ -858,6 +872,30 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
+ 		GSVector4i src_rect;
+ 		GSVector4 src_uv, draw_rect;
+ 		GSTexture* current = g_gs_device->GetCurrent();
++
++		if (current)
++		{
++			if (!s_diag_current_nonnull_logged)
++			{
++				Console.WriteLn("DIAG GS current texture: non-null");
++				Console.WriteLn("DIAG GS current texture size: %dx%d", current->GetWidth(), current->GetHeight());
++				s_diag_current_nonnull_logged = true;
++			}
++		}
++		else if (!s_diag_current_null_logged)
++		{
++			Console.WriteLn("DIAG GS current texture: null");
++			s_diag_current_null_logged = true;
++		}
++
++		if (current && !s_diag_snapshot_queued)
++		{
++			FileSystem::CreateDirectoryPath("/storage/ports/pcsx2-eerunner-smoke/debug", true);
++			GSQueueSnapshot(s_diag_snapshot_path);
++			Console.WriteLn("DIAG GS queued screenshot: %s", s_diag_snapshot_path);
++			s_diag_snapshot_queued = true;
++		}
++
+ 		if (current && !blank_frame)
+ 		{
+ #ifdef ENABLE_VULKAN
+diff --git a/pcsx2/GS/Renderers/OpenGL/GLContext.cpp b/pcsx2/GS/Renderers/OpenGL/GLContext.cpp
+index 889ecc2343..25e0760e88 100644
+--- a/pcsx2/GS/Renderers/OpenGL/GLContext.cpp
++++ b/pcsx2/GS/Renderers/OpenGL/GLContext.cpp
+@@ -37,6 +37,8 @@ GLContext::~GLContext() = default;
+ 
+ std::unique_ptr<GLContext> GLContext::Create(const WindowInfo& wi, Error* error)
+ {
++	Console.WriteLnFmt("DIAG GLContext::Create: enter window_type={} prefer_es={}",
++		static_cast<int>(wi.type), ShouldPreferESContext() ? 1 : 0);
+ 	static constexpr Version vlist[] = {
+ 		{Profile::Core, 4, 6},
+ 		{Profile::Core, 4, 5},
+@@ -92,7 +94,10 @@ std::unique_ptr<GLContext> GLContext::Create(const WindowInfo& wi, Error* error)
+ #endif
+ 
+ 	if (!context)
++	{
++		Console.WriteLn("DIAG GLContext::Create: no platform context created");
+ 		return nullptr;
++	}
+ 
+ 	// NOTE: Not thread-safe. But this is okay, since we're not going to be creating more than one context at a time.
+ 	static GLContext* context_being_created;
+@@ -111,11 +116,13 @@ std::unique_ptr<GLContext> GLContext::Create(const WindowInfo& wi, Error* error)
+ 		if (!gladLoadGLES2([](const char* name) { return reinterpret_cast<GLADapiproc>(context_being_created->GetProcAddress(name)); }))
+ 		{
+ 			Error::SetStringView(error, "Failed to load GLES functions for GLAD");
++			Console.WriteLn("DIAG GLContext::Create: gladLoadGLES2 failed");
+ 			return nullptr;
+ 		}
+ 	}
+ 
+ 	context_being_created = nullptr;
++	Console.WriteLnFmt("DIAG GLContext::Create: exit success is_gles={}", context->IsGLES() ? 1 : 0);
+ 
+ 	return context;
+ }
+diff --git a/pcsx2/GS/Renderers/OpenGL/GSDeviceOGL.cpp b/pcsx2/GS/Renderers/OpenGL/GSDeviceOGL.cpp
+index b2c15b9f2c..1991933e1c 100644
+--- a/pcsx2/GS/Renderers/OpenGL/GSDeviceOGL.cpp
++++ b/pcsx2/GS/Renderers/OpenGL/GSDeviceOGL.cpp
+@@ -252,40 +252,67 @@ void GSDeviceOGL::SetVSyncMode(GSVSyncMode mode, bool allow_present_throttle)
+ 
+ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
+ {
++	Console.WriteLnFmt("DIAG GSDeviceOGL::Create: enter window_type={} vsync_mode={} allow_present_throttle={}",
++		static_cast<int>(m_window_info.type), static_cast<int>(vsync_mode), allow_present_throttle ? 1 : 0);
+ 	if (!GSDevice::Create(vsync_mode, allow_present_throttle))
++	{
++		Console.WriteLn("DIAG GSDeviceOGL::Create: GSDevice::Create failed");
+ 		return false;
++	}
+ 
+ 	// GL is a pain and needs the window super early to create the context.
++	Console.WriteLn("DIAG GSDeviceOGL::Create: calling AcquireWindow(true)");
+ 	if (!AcquireWindow(true))
++	{
++		Console.WriteLn("DIAG GSDeviceOGL::Create: AcquireWindow(true) failed");
+ 		return false;
++	}
++	Console.WriteLnFmt("DIAG GSDeviceOGL::Create: AcquireWindow(true) succeeded window_type={}",
++		static_cast<int>(m_window_info.type));
+ 
+ 	Error error;
++	Console.WriteLn("DIAG GSDeviceOGL::Create: calling GLContext::Create");
+ 	m_gl_context = GLContext::Create(m_window_info, &error);
+ 	if (!m_gl_context)
+ 	{
+ 		Console.ErrorFmt("GL: Failed to create any context: {}", error.GetDescription());
++		Console.WriteLnFmt("DIAG GSDeviceOGL::Create: GLContext::Create failed: {}", error.GetDescription());
+ 		return false;
+ 	}
++	Console.WriteLnFmt("DIAG GSDeviceOGL::Create: GLContext::Create succeeded is_gles={}", m_gl_context->IsGLES() ? 1 : 0);
+ 
++	Console.WriteLn("DIAG GSDeviceOGL::Create: calling MakeCurrent");
+ 	if (!m_gl_context->MakeCurrent())
+ 	{
+ 		Console.Error("GL: Failed to make context current");
++		Console.WriteLn("DIAG GSDeviceOGL::Create: MakeCurrent failed");
+ 		return false;
+ 	}
++	Console.WriteLn("DIAG GSDeviceOGL::Create: MakeCurrent succeeded");
+ 
+ 	m_is_gles = m_gl_context->IsGLES();
+ 
++	Console.WriteLn("DIAG GSDeviceOGL::Create: calling CheckFeatures");
+ 	if (!CheckFeatures())
++	{
++		Console.WriteLn("DIAG GSDeviceOGL::Create: CheckFeatures failed");
+ 		return false;
++	}
++	Console.WriteLn("DIAG GSDeviceOGL::Create: CheckFeatures succeeded");
+ 
+ 	// Store adapter name currently in use
+ 	m_name = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+ 
++	Console.WriteLn("DIAG GSDeviceOGL::Create: calling SetSwapInterval");
+ 	SetSwapInterval();
+ 
+ 	// Render a frame as soon as possible to clear out whatever was previously being displayed.
+ 	if (m_window_info.type != WindowInfo::Type::Surfaceless)
++	{
++		Console.WriteLn("DIAG GSDeviceOGL::Create: calling RenderBlankFrame");
+ 		RenderBlankFrame();
++		Console.WriteLn("DIAG GSDeviceOGL::Create: RenderBlankFrame completed");
++	}
+ 
+ 	if (!GSConfig.DisableShaderCache)
+ 	{
+@@ -3300,6 +3327,7 @@ bool GSDeviceOGL::CreateImGuiProgram()
+ 	glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(ImDrawVert), (GLvoid*)offsetof(ImDrawVert, col));
+ 
+ 	glBindVertexArray(GLState::vao);
++	Console.WriteLn("DIAG GSDeviceOGL::Create: exit success");
+ 	return true;
+ }
+ 
+diff --git a/pcsx2/arm64/RecStubs.cpp b/pcsx2/arm64/RecStubs.cpp
+index dc7631acc3..079665c50e 100644
+--- a/pcsx2/arm64/RecStubs.cpp
++++ b/pcsx2/arm64/RecStubs.cpp
+@@ -102,8 +102,8 @@ void vtlb_DynBackpatchLoadStore(uptr code_address, u32 code_size, u32 guest_pc,
+ 	// 128-bit fastmem path. data_register is the q register the inline
+ 	// Ldr/Str targeted: q0 for the legacy temp shape (LQC2/SQC2, LQ-to-r0 —
+ 	// emitted post-iFlushCall so q0 is allocator-detached), or an allocated
+-	// NEONTYPE_GPRREG slot (GE-14 LQ/SQ). vtlb_memRead128 returns r128 in q0
+-	// per AAPCS64 and vtlb_memWrite128 takes the value in q0, so a non-q0
++	// NEONTYPE_GPRREG slot (GE-14 LQ/SQ). vtlb_memRead128_bridge returns r128 in q0
++	// per AAPCS64 and vtlb_memWrite128_bridge takes the value in q0, so a non-q0
+ 	// data_register needs a Mov on each side of the slow-path call; q0
+ 	// itself is save/restored by the mask machinery when live (store case —
+ 	// the load case skips the dest from the save set, and the result-landing
+@@ -140,21 +140,18 @@ void vtlb_DynBackpatchLoadStore(uptr code_address, u32 code_size, u32 guest_pc,
+ 		// events and cause cascading mid-block timing bugs. Matches the
+ 		// pattern at recVTLB-arm64.cpp:112+120.
+ 		armFlushCycleDelta();
+-		armFlushEEPinsBeforePreserveMostCall(); // emits nothing for the current table
++		armFlushEEPinsBeforeVTLBBridgeCall(); // emits nothing for the current table
+ 		if (is_load)
+ 		{
+-			armEmitCall((void*)vtlb_memRead128);
++			armEmitCall((void*)vtlb_memRead128_bridge);
+ 		}
+ 		else
+ 		{
+-			armEmitCall((void*)vtlb_memWrite128);
++			armEmitCall((void*)vtlb_memWrite128_bridge);
+ 		}
+ 		armReloadCycleDelta();
+-		// vtlb_memRead/Write128 are preserve_most: x9-x15 covers every
+-		// caller-saved pin (tier-2 x11/x12/x13), so this emits nothing (pins
+-		// are not allocator state, so the gpr_bitmask save/restore never
+-		// covers them either; q0 untouched).
+-		armReloadEEPinsAfterPreserveMostCall();
++		// The explicit bridge preserves x11/x12/x13, so this emits nothing (pins are not allocator state, so the gpr_bitmask save/restore never covers them either; q0 untouched).
++		armReloadEEPinsAfterVTLBBridgeCall();
+ 		// Land the read result in the resident dest slot (excluded from the
+ 		// save set above, so the restores below can't clobber it).
+ 		if (is_load && data_register != 0)
+@@ -210,21 +207,21 @@ void vtlb_DynBackpatchLoadStore(uptr code_address, u32 code_size, u32 guest_pc,
+ 		armAsm->Mov(a64::w0, a64::w9);
+ 		// Spill/reload RECCYCLE — see 128-bit slow_path above for rationale.
+ 		armFlushCycleDelta();
+-		armFlushEEPinsBeforePreserveMostCall(); // emits nothing for the current table
++		armFlushEEPinsBeforeVTLBBridgeCall(); // emits nothing for the current table
+ 		switch (size_in_bits)
+ 		{
+-			case 8:  armEmitCall((void*)vtlb_memRead<mem8_t>);  break;
+-			case 16: armEmitCall((void*)vtlb_memRead<mem16_t>); break;
+-			case 32: armEmitCall((void*)vtlb_memRead<mem32_t>); break;
+-			case 64: armEmitCall((void*)vtlb_memRead<mem64_t>); break;
++			case 8:  armEmitCall((void*)vtlb_memRead8_bridge);  break;
++			case 16: armEmitCall((void*)vtlb_memRead16_bridge); break;
++			case 32: armEmitCall((void*)vtlb_memRead32_bridge); break;
++			case 64: armEmitCall((void*)vtlb_memRead64_bridge); break;
+ 			default: break;
+ 		}
+ 		armReloadCycleDelta();
+-		// preserve_most seam — emits nothing; see the 128-bit slow path above.
++		// explicit bridge seam — emits nothing; see the 128-bit slow path above.
+ 		// When data_register below is itself a pin (WS-C4 pinned dest), it
+ 		// rides the call spared and the Mov lands the fresh result (x0
+ 		// untouched here).
+-		armReloadEEPinsAfterPreserveMostCall();
++		armReloadEEPinsAfterVTLBBridgeCall();
+ 		// Extend the handler return into x0 for the 64-bit cpuRegs.GPR store.
+ 		// AAPCS64 leaves the upper bits of x0 unspecified for sub-word returns,
+ 		// so UNSIGNED sub-64-bit loads must Uxtw too — otherwise the garbage
+@@ -307,18 +304,18 @@ void vtlb_DynBackpatchLoadStore(uptr code_address, u32 code_size, u32 guest_pc,
+ 
+ 		// Spill/reload RECCYCLE — see 128-bit slow_path above for rationale.
+ 		armFlushCycleDelta();
+-		armFlushEEPinsBeforePreserveMostCall(); // emits nothing for the current table
++		armFlushEEPinsBeforeVTLBBridgeCall(); // emits nothing for the current table
+ 		switch (size_in_bits)
+ 		{
+-			case 8:  armEmitCall((void*)vtlb_memWrite<mem8_t>);  break;
+-			case 16: armEmitCall((void*)vtlb_memWrite<mem16_t>); break;
+-			case 32: armEmitCall((void*)vtlb_memWrite<mem32_t>); break;
+-			case 64: armEmitCall((void*)vtlb_memWrite<mem64_t>); break;
++			case 8:  armEmitCall((void*)vtlb_memWrite8_bridge);  break;
++			case 16: armEmitCall((void*)vtlb_memWrite16_bridge); break;
++			case 32: armEmitCall((void*)vtlb_memWrite32_bridge); break;
++			case 64: armEmitCall((void*)vtlb_memWrite64_bridge); break;
+ 			default: pxFailRel("Unsupported store size in backpatch"); break;
+ 		}
+ 		armReloadCycleDelta();
+-		// preserve_most seam — emits nothing; see the 128-bit slow path above.
+-		armReloadEEPinsAfterPreserveMostCall();
++		// explicit bridge seam — emits nothing; see the 128-bit slow path above.
++		armReloadEEPinsAfterVTLBBridgeCall();
+ 
+ 		armAsm->Bind(&done);
+ 	}
+diff --git a/pcsx2/arm64/iCore-arm64.cpp b/pcsx2/arm64/iCore-arm64.cpp
+index 9fe4f243b0..f7dcf98add 100644
+--- a/pcsx2/arm64/iCore-arm64.cpp
++++ b/pcsx2/arm64/iCore-arm64.cpp
+@@ -73,11 +73,12 @@ _arm64neonregs arm64neon[NUM_ARM_NEON_REGS], s_saveArm64NEONregs[NUM_ARM_NEON_RE
+ //          scratch use, so nothing conflicts with allocator residency)
+ // x8-x10:  scratch (RXSCRATCH + load/store addr/value) — NOT allocatable
+ // x11:     REEPIN_AT — NOT allocatable for EE (tier-2 pinned mirror of
+-//          GPR.r[1].UD[0]; caller-saved but preserve_most-spared — see the
+-//          preservation contract in iR5900-arm64.h). IOP-allocatable.
++//          GPR.r[1].UD[0]; caller-saved but protected by the explicit VTLB
++//          bridge — see the preservation contract in iR5900-arm64.h).
++//          IOP-allocatable.
+ // x12/x13: REEPIN_K0/REEPIN_S0 — NOT allocatable for EE (tier-2 pinned
+-//          mirrors of GPR.r[26]/[16].UD[0]; caller-saved but
+-//          preserve_most-spared). IOP-allocatable.
++//          mirrors of GPR.r[26]/[16].UD[0]; caller-saved but protected by
++//          the explicit VTLB bridge). IOP-allocatable.
+ // x14/x15: caller-saved temporaries (allocatable; shared with the mVU
+ //          macro-mode VI pool, which is compatible because macro ops emit
+ //          on a flushed allocator)
+@@ -143,9 +144,9 @@ static constexpr uint32_t EE_ALLOCATABLE_MASK = ~((3u << 0)
+ // callee-saved pins are restored before EE JIT code resumes; the
+ // caller-saved x11-x13 are legal because IOP execution is reachable from a
+ // live EE session only through C seams, and every EE C seam that can run
+-// IOP reloads its caller-saved pins afterwards (the preserve_most
+-// emit-nothing seams cannot run IOP: the vtlb dispatchers' preserve_most
+-// contract restores x9-x15 regardless of what they call internally).
++// IOP reloads its caller-saved pins afterwards. The explicit VTLB bridge
++// preserves the warm read/write seam’s x11-x13 pins; plain AAPCS callees
++// still need the normal caller-saved reload path.
+ // Shared TEMP allocations always use the EE mask (restrictive = safe for
+ // both CPUs).
+ static constexpr uint32_t IOP_ALLOCATABLE_MASK =
+diff --git a/pcsx2/arm64/iR5900-arm64.h b/pcsx2/arm64/iR5900-arm64.h
+index 6bc104337c..3c17ff8bd5 100644
+--- a/pcsx2/arm64/iR5900-arm64.h
++++ b/pcsx2/arm64/iR5900-arm64.h
+@@ -105,25 +105,24 @@
+ // bodies (flag setup/exit thunks are micro-only paths).
+ //
+ // x11/x12/x13 are CALLER-SAVED (tier 2 — the callee-saved budget is
+-// exhausted) but sit inside preserve_most's spared range x9-x15 (EE-SRA 3
+-// Arm D). The preservation contract:
+-//   1. vtlb_memRead/Write<T> + the 128-bit variants — the ONLY C calls on
+-//      warm paths (fastmem backpatch thunk + inline softmem slow paths) —
+-//      are annotated preserve_most (vtlb.h): the callee preserves x9-x15,
+-//      which covers ALL tier-2 pins. Those seven call sites (4 recVTLB
+-//      softmem/128-bit slow paths + 3 RecStubs thunk slow paths) use
+-//      armReloadEEPinsAfterPreserveMostCall(), which emits NOTHING for
+-//      this table — warm vtlb seams carry zero pin traffic. This holds
+-//      even though the dispatchers call arbitrary handlers internally
+-//      (VIF dynarec, IntCHackCheck, ...): preserve_most is a callee
+-//      contract, so clang saves x9-x15 in the dispatcher's own prologue.
+-//      The thunk's own emitted code uses only w8/w9/w10/x0/x17
+-//      (RecStubs.cpp) and its gpr_bitmask save loop stays pin-free — pins
+-//      are not allocator state.
++// exhausted) but are protected by the explicit VTLB bridge shims that save
++// and restore exactly those three registers around the JIT→VTLB call seam
++// (EE-SRA 3 Arm D). The preservation contract:
++//   1. vtlb_memRead/Write<T> + the 128-bit variants remain ordinary AAPCS64
++//      C functions. The four warm call families (4 recVTLB softmem/128-bit
++//      slow paths + 3 RecStubs thunk slow paths) now call through the VTLB
++//      bridge functions, which preserve x11/x12/x13 across the helper call
++//      and leave the argument/return registers untouched. Warm vtlb seams
++//      therefore still carry zero pin traffic. This holds even though the
++//      dispatchers call arbitrary helpers internally (VIF dynarec,
++//      IntCHackCheck, ...): the bridge is the only register-preservation
++//      layer the JIT relies on, and the thunk's own emitted code uses only
++//      w8/w9/w10/x0/x17 (RecStubs.cpp) while its gpr_bitmask save loop stays
++//      pin-free — pins are not allocator state.
+ //   2. Every other C call reachable inside a live session is followed by
+ //      armReloadEEClobberedPins() (3 Ldrs, all cold paths): the const-
+ //      paddr MMIO shortcuts (raw registered handlers are plain AAPCS,
+-//      NOT preserve_most), dyna_block_discard/page_reset stubs, Goemon
++//      NOT bridge), dyna_block_discard/page_reset stubs, Goemon
+ //      TLB hooks, SetBranchReg's vtlb_V2P, Interp::MTC0, FPU/VCALLMS
+ //      interpreter fallbacks, the vu0Sync family (iCOP2), macro-mode
+ //      mVUaddrFix's waitMTVU (via armEmitEEClobberedPinReloadForCOP2),
+@@ -271,28 +270,27 @@ static __fi void armReloadEEClobberedPins()
+ 	}
+ }
+ 
+-// preserve_most (clang AArch64) spares x9-x15 in the CALLEE: the caller may
+-// keep values live there across the call even though the registers are
+-// caller-saved under plain AAPCS.
+-static __fi bool armIsPreserveMostSparedRegister(int reg)
++// The explicit VTLB bridge preserves x11/x12/x13 around the helper call.
++// This predicate marks that preserved register window so the pin reload/
++// flush helpers can stay a no-op for the warm VTLB seam.
++static __fi bool armIsBridgeSparedRegister(int reg)
+ {
+-	return reg >= 9 && reg <= 15;
++	return reg >= 11 && reg <= 13;
+ }
+ 
+-// Reload only the pins a preserve_most callee can actually clobber:
+-// caller-saved AND outside the spared x9-x15 range. For the current table
+-// (tier-2 pins in x11/x12/x13) this emits NOTHING — warm vtlb seams carry
+-// zero pin traffic. ONLY valid after calls to preserve_most-annotated
+-// callees (vtlb_memRead/Write<T>/128); plain-AAPCS callees (raw registered
+-// MMIO handlers, everything else) need armReloadEEClobberedPins. A future
+-// pin homed outside x9-x15 joins the reload automatically via the table
+-// walk.
+-static __fi void armReloadEEPinsAfterPreserveMostCall()
++// Reload only the pins the explicit VTLB bridge preserves: x11/x12/x13 are
++// already restored by the bridge, and the remaining table entries are either
++// callee-saved or outside the live-pin set, so this emits NOTHING — warm
++// vtlb seams carry zero pin traffic (x0 result untouched). Plain-AAPCS
++// callees (raw registered MMIO handlers, everything else) still need
++// armReloadEEClobberedPins. A future pin homed outside the bridge window
++// joins the reload automatically via the table walk.
++static __fi void armReloadEEPinsAfterVTLBBridgeCall()
+ {
+ 	for (const EEPinnedGPR& pin : kEEPinTable)
+ 	{
+ 		const int reg = static_cast<int>(pin.host.GetCode());
+-		if (!armIsCalleeSavedRegister(reg) && !armIsPreserveMostSparedRegister(reg))
++		if (!armIsCalleeSavedRegister(reg) && !armIsBridgeSparedRegister(reg))
+ 			armAsm->Ldr(pin.host, armCpuRegMem(&cpuRegs.GPR.r[pin.gpr].UD[0]));
+ 	}
+ }
+@@ -305,7 +303,7 @@ static __fi void armReloadEEPinsAfterPreserveMostCall()
+ // Arm E verdict (RK3562, 2026-07-09): lazy removed 4.3% of emitted EE-block
+ // instructions (Strs 54.8k → 7.9k on the SotC census) and won EE-thread SotC
+ // −1.05% / UYA −0.25% against the old write-through discipline ON THE ARM C/D
+-// TABLE (callee-saved tier-1 + preserve_most-spared tier-2 = near-zero seam
++// TABLE (callee-saved tier-1 + bridge-preserved tier-2 = near-zero seam
+ // bills). WS-B's earlier UYA +0.84% lazy regression was the old caller-saved
+ // homing paying 6 Str + 6 Ldr at every C seam — the re-home, not the lazy
+ // idea, was what that verdict measured.
+@@ -356,18 +354,16 @@ static __fi void armFlushEEClobberedPins()
+ 	}
+ }
+ 
+-// Lazy-dirty twin of armReloadEEPinsAfterPreserveMostCall: pins the callee
+-// spares ride through the call in their registers (still newest), so they
++// Lazy-dirty twin of armReloadEEPinsAfterVTLBBridgeCall: pins in the bridge
++// window ride through the call in their registers (still newest), so they
+ // need neither flush nor reload — the same treatment callee-saved pins
+-// already get at these seams. That is sound for exactly the reason the
+-// callee-saved treatment is: the preserve_most vtlb dispatchers never READ
+-// guest GPR memory. Emits nothing for the current table.
+-static __fi void armFlushEEPinsBeforePreserveMostCall()
++// already get at these seams. Emits nothing for the current table.
++static __fi void armFlushEEPinsBeforeVTLBBridgeCall()
+ {
+ 	for (const EEPinnedGPR& pin : kEEPinTable)
+ 	{
+ 		const int reg = static_cast<int>(pin.host.GetCode());
+-		if (!armIsCalleeSavedRegister(reg) && !armIsPreserveMostSparedRegister(reg))
++		if (!armIsCalleeSavedRegister(reg) && !armIsBridgeSparedRegister(reg))
+ 			armAsm->Str(pin.host, armCpuRegMem(&cpuRegs.GPR.r[pin.gpr].UD[0]));
+ 	}
+ }
+diff --git a/pcsx2/arm64/microVU_Misc-arm64.inl b/pcsx2/arm64/microVU_Misc-arm64.inl
+index 6dfc2a4f27..1e035b8b51 100644
+--- a/pcsx2/arm64/microVU_Misc-arm64.inl
++++ b/pcsx2/arm64/microVU_Misc-arm64.inl
+@@ -337,7 +337,7 @@ __fi void mVUaddrFix(mV, const a64::Register& gprReg)
+ 		{
+ 			// COP2 macro mode emits this inline into an EE block where the
+ 			// caller-saved EE pins (x11/x12/x13 since Arm D) are live across
+-			// the call — waitMTVU is plain AAPCS, not preserve_most, so the
++			// the call — full clobber reload applies; micro mode runs behind a C boundary whose call site reloads instead.
+ 			// full clobber reload applies; micro mode runs behind a C
+ 			// boundary whose call site reloads instead. Flush-before is a
+ 			// lazy-dirty no-op in write-through mode.
+diff --git a/pcsx2/arm64/recVTLB-arm64.cpp b/pcsx2/arm64/recVTLB-arm64.cpp
+index e883c48725..abcade1114 100644
+--- a/pcsx2/arm64/recVTLB-arm64.cpp
++++ b/pcsx2/arm64/recVTLB-arm64.cpp
+@@ -104,19 +104,18 @@ static void vtlbSoftmemRead(int addr_wreg, u32 bits, bool sign)
+ 	// this the JIT's pinned x25 stays stale and block-end cycle compare
+ 	// never trips on tight INTC polls.
+ 	armFlushCycleDelta();
+-	armFlushEEPinsBeforePreserveMostCall(); // lazy-dirty seam twin — emits nothing today
++	armFlushEEPinsBeforeVTLBBridgeCall(); // lazy-dirty seam twin — emits nothing today
+ 	switch (bits)
+ 	{
+-		case 8:  armEmitCall((void*)vtlb_memRead<mem8_t>);  break;
+-		case 16: armEmitCall((void*)vtlb_memRead<mem16_t>); break;
+-		case 32: armEmitCall((void*)vtlb_memRead<mem32_t>); break;
+-		case 64: armEmitCall((void*)vtlb_memRead<mem64_t>); break;
++		case 8:  armEmitCall((void*)vtlb_memRead8_bridge);  break;
++		case 16: armEmitCall((void*)vtlb_memRead16_bridge); break;
++		case 32: armEmitCall((void*)vtlb_memRead32_bridge); break;
++		case 64: armEmitCall((void*)vtlb_memRead64_bridge); break;
+ 	}
+ 	armReloadCycleDelta();
+-	// vtlb_memRead is preserve_most: the spared x9-x15 range covers every
+-	// caller-saved pin (tier-2 x11/x12/x13), so this emits nothing — the
+-	// warm softmem seam carries zero pin traffic (x0 result untouched).
+-	armReloadEEPinsAfterPreserveMostCall();
++	// The explicit bridge preserves x11/x12/x13, so the warm softmem seam
++	// still carries zero pin traffic (x0 result untouched).
++	armReloadEEPinsAfterVTLBBridgeCall();
+ 	// Sign-extend if needed (vtlb_memRead returns zero-extended)
+ 	if (sign && bits == 8)
+ 		armAsm->Sxtb(a64::x0, a64::w0);
+@@ -178,17 +177,17 @@ static void vtlbSoftmemWrite(int addr_wreg, int value_reg, u32 bits)
+ 	// any cycle-mutating handler reachable from MMIO must keep the JIT's
+ 	// pinned x25 coherent. See vtlbSoftmemRead for full rationale.
+ 	armFlushCycleDelta();
+-	armFlushEEPinsBeforePreserveMostCall(); // lazy-dirty seam twin — emits nothing today
++	armFlushEEPinsBeforeVTLBBridgeCall(); // lazy-dirty seam twin — emits nothing today
+ 	switch (bits)
+ 	{
+-		case 8:  armEmitCall((void*)vtlb_memWrite<mem8_t>);  break;
+-		case 16: armEmitCall((void*)vtlb_memWrite<mem16_t>); break;
+-		case 32: armEmitCall((void*)vtlb_memWrite<mem32_t>); break;
+-		case 64: armEmitCall((void*)vtlb_memWrite<mem64_t>); break;
++		case 8:  armEmitCall((void*)vtlb_memWrite8_bridge);  break;
++		case 16: armEmitCall((void*)vtlb_memWrite16_bridge); break;
++		case 32: armEmitCall((void*)vtlb_memWrite32_bridge); break;
++		case 64: armEmitCall((void*)vtlb_memWrite64_bridge); break;
+ 	}
+ 	armReloadCycleDelta();
+-	// preserve_most seam — emits nothing; see vtlbSoftmemRead.
+-	armReloadEEPinsAfterPreserveMostCall();
++	// Explicit bridge seam — emits nothing; see vtlbSoftmemRead.
++	armReloadEEPinsAfterVTLBBridgeCall();
+ 
+ 	armAsm->Bind(&done);
+ }
+@@ -483,7 +482,7 @@ static bool recLoadConstPaddrMMIOShortcut(u32 bits, bool sign, bool forceEventTe
+ 	armFlushEEClobberedPins(); // lazy-dirty seam: pairs with the reload below
+ 	armEmitCall(vmv.assumeHandlerGetRaw(szidx, false));
+ 	armReloadCycleDelta();
+-	// Raw registered handlers are plain AAPCS (not preserve_most like the
++	// Raw registered handlers are plain AAPCS (using the explicit bridge like the
+ 	// vtlb_memRead/Write dispatchers) and write no guest GPRs — restore the
+ 	// caller-saved pins they clobbered. x0 (the handler result) is untouched.
+ 	armReloadEEClobberedPins();
+@@ -624,7 +623,7 @@ static void recLoad(u32 bits, bool sign)
+ 		// data_register makes the backpatch thunk reconstruct into it on a
+ 		// fault (the thunk's Mov data_register<-x0 runs after its pin reload
+ 		// seam, so the pin gets the load result last; with tier-2 pins in the
+-		// preserve_most-spared x11-x13 that seam emits nothing and the pin
++		// bridge-preserved x11-x13 that seam emits nothing and the pin
+ 		// simply rides through the call). Kills the Mov pin<-x0 mirror
+ 		// refresh; the canonical Str in recStoreLoadResult stays. Not done
+ 		// for softmem — its result comes back from a C call in x0.
+@@ -863,16 +862,16 @@ static void vtlbSoftmemRead128(int addr_wreg)
+ 	armAsm->Ldr(a64::q0, a64::MemOperand(a64::x0));
+ 	armAsm->B(&done);
+ 
+-	// Slow path: call vtlb_memRead128(addr) — returns r128 in q0
++	// Slow path: call vtlb_memRead128_bridge(addr) — returns r128 in q0
+ 	armAsm->Bind(&slow_path);
+ 	armAsm->Mov(a64::w0, a64::w9);
+ 	// See vtlbSoftmemRead for the RECCYCLE coherence rationale.
+ 	armFlushCycleDelta();
+-	armFlushEEPinsBeforePreserveMostCall(); // lazy-dirty seam twin — emits nothing today
+-	armEmitCall((void*)vtlb_memRead128);
++	armFlushEEPinsBeforeVTLBBridgeCall(); // lazy-dirty seam twin — emits nothing today
++	armEmitCall((void*)vtlb_memRead128_bridge);
+ 	armReloadCycleDelta();
+-	// preserve_most seam — emits nothing; see vtlbSoftmemRead (q0 untouched).
+-	armReloadEEPinsAfterPreserveMostCall();
++	// Explicit bridge seam — emits nothing; see vtlbSoftmemRead (q0 untouched).
++	armReloadEEPinsAfterVTLBBridgeCall();
+ 
+ 	armAsm->Bind(&done);
+ }
+@@ -897,17 +896,17 @@ static void vtlbSoftmemWrite128(int addr_wreg)
+ 	armAsm->Str(a64::q0, a64::MemOperand(a64::x0));
+ 	armAsm->B(&done);
+ 
+-	// Slow path: call vtlb_memWrite128(addr, value)
++	// Slow path: call vtlb_memWrite128_bridge(addr, value)
+ 	// addr in w0, value in q0 (ARM64 ABI: 128-bit passed in q0)
+ 	armAsm->Bind(&slow_path);
+ 	armAsm->Mov(a64::w0, a64::w9);
+ 	// See vtlbSoftmemRead for the RECCYCLE coherence rationale.
+ 	armFlushCycleDelta();
+-	armFlushEEPinsBeforePreserveMostCall(); // lazy-dirty seam twin — emits nothing today
+-	armEmitCall((void*)vtlb_memWrite128);
++	armFlushEEPinsBeforeVTLBBridgeCall(); // lazy-dirty seam twin — emits nothing today
++	armEmitCall((void*)vtlb_memWrite128_bridge);
+ 	armReloadCycleDelta();
+-	// preserve_most seam — emits nothing; see vtlbSoftmemRead.
+-	armReloadEEPinsAfterPreserveMostCall();
++	// Explicit bridge seam — emits nothing; see vtlbSoftmemRead.
++	armReloadEEPinsAfterVTLBBridgeCall();
+ 
+ 	armAsm->Bind(&done);
+ }
+diff --git a/pcsx2/vtlb.h b/pcsx2/vtlb.h
+index 6c552fbab9..95efcc84a3 100644
+--- a/pcsx2/vtlb.h
++++ b/pcsx2/vtlb.h
+@@ -99,39 +99,29 @@ extern bool vtlb_IsFaultingPC(u32 guest_pc);
+ 
+ //Memory functions
+ 
+-// On arm64, the EE JIT keeps guest values live in caller-saved host
+-// registers across its vtlb slow paths (the EE-SRA x12/x13 pins; see
+-// iR5900-arm64.h). preserve_most makes these dispatchers preserve x9-x15,
+-// so the fastmem backpatch thunk and inline softmem slow paths need no
+-// pin spill/reload around their calls. Cost lands inside the callee
+-// (a prologue/epilogue x9-x15 save) — MMIO-dispatch-only, never on the
+-// direct-RAM fast path. Return/argument registers are unaffected, so
+-// C++ callers (interpreter memory ops) behave identically.
+-#ifdef ARCH_ARM64
+-#if defined(__has_attribute) && __has_attribute(preserve_most)
+-#define VTLB_PRESERVE_MOST __attribute__((preserve_most))
+-#else
+-// Hard requirement, not an optimization: the arm64 recompiler emits calls to
+-// these dispatchers assuming the preserve_most contract (x9-x15 spared) and
+-// skips pin spill/reload around them (recVTLB-arm64.cpp, RecStubs.cpp). A
+-// compiler that drops the attribute (GCC warns and ignores unknown
+-// attributes; MSVC has no equivalent) would build a binary whose emitted
+-// code silently corrupts the EE pin registers at every MMIO slow path.
+-// Build arm64 targets with clang (works for linux, windows-msvc, android,
+-// and apple targets) until a no-preserve_most emitter fallback exists.
+-#error "ARCH_ARM64 requires a compiler with __attribute__((preserve_most)) - build with clang"
+-#endif
+-#else
+-#define VTLB_PRESERVE_MOST
+-#endif
+-
+ template< typename DataType >
+-extern DataType VTLB_PRESERVE_MOST vtlb_memRead(u32 mem);
+-extern RETURNS_R128 VTLB_PRESERVE_MOST vtlb_memRead128(u32 mem);
++extern DataType vtlb_memRead(u32 mem);
++extern r128 vtlb_memRead128(u32 mem);
+ 
+ template< typename DataType >
+-extern void VTLB_PRESERVE_MOST vtlb_memWrite(u32 mem, DataType value);
+-extern void TAKES_R128 VTLB_PRESERVE_MOST vtlb_memWrite128(u32 mem, r128 value);
++extern void vtlb_memWrite(u32 mem, DataType value);
++extern void vtlb_memWrite128(u32 mem, r128 value);
++
++#ifdef ARCH_ARM64
++extern "C" {
++extern mem8_t vtlb_memRead8_bridge(u32 mem);
++extern mem16_t vtlb_memRead16_bridge(u32 mem);
++extern mem32_t vtlb_memRead32_bridge(u32 mem);
++extern mem64_t vtlb_memRead64_bridge(u32 mem);
++extern r128 vtlb_memRead128_bridge(u32 mem);
++
++extern void vtlb_memWrite8_bridge(u32 mem, mem8_t value);
++extern void vtlb_memWrite16_bridge(u32 mem, mem16_t value);
++extern void vtlb_memWrite32_bridge(u32 mem, mem32_t value);
++extern void vtlb_memWrite64_bridge(u32 mem, mem64_t value);
++extern void vtlb_memWrite128_bridge(u32 mem, r128 value);
++}
++#endif
+ 
+ // "Safe" variants of vtlb, designed for external tools.
+ // These routines only access the various RAM, and will not call handlers

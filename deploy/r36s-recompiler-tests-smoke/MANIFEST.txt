@@ -1,0 +1,10 @@
+MANIFEST.txt	empty	0	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	-
+README.md	ASCII text	585	8d621a07c3b9c29412d03f1c0a6e57ea24dc6fdade0d9280522bbbe75b91abea	-
+bin/recompiler_tests	ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 6.10.0, with debug_info, not stripped	46941968	306b1ca7a3a44b569f6180459544f90d21eb2dcbba1d2d76f155fe2912a5864b	-
+diagnostic.sh	POSIX shell script, ASCII text executable	776	a00d9ba122d308bcb49ee0d848b874d32ceb47cd4c720ccdc87cea356fe786d6	-
+launch-jit-smoke.sh	POSIX shell script, ASCII text executable	1500	70ae434d218574c3b71a96b38d36ab2f39af1b61e76f119e3fadb7303a9a03cf	-
+lib/libSDL3.so	symlink	3116600	05796dab25c8e5d58ed925453b1f698cc08937c197813bda66286f4b26f0805b	libSDL3.so.0
+lib/libSDL3.so.0	symlink	3116600	05796dab25c8e5d58ed925453b1f698cc08937c197813bda66286f4b26f0805b	libSDL3.so.0.2.6
+lib/libSDL3.so.0.2.6	ELF 64-bit LSB shared object, ARM aarch64, version 1 (SYSV), dynamically linked, with debug_info, not stripped	3116600	05796dab25c8e5d58ed925453b1f698cc08937c197813bda66286f4b26f0805b	-
+lib/libplutosvg.so.0	ELF 64-bit LSB shared object, ARM aarch64, version 1 (SYSV), dynamically linked, with debug_info, not stripped	76384	7967503fd7bda563c7bc95bf1f879cb722fec3db1e3ce32dae326797085e8f8f	-
+lib/libplutovg.so.1	ELF 64-bit LSB shared object, ARM aarch64, version 1 (SYSV), dynamically linked, with debug_info, not stripped	359160	f76146d6422c2cadeeae5c2b15ef0f99939e92ec973a30ddbd23d603ae46a15d	-

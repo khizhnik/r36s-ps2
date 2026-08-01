@@ -1,0 +1,86 @@
+# Build outputs
+/build/
+/build-*/
+/cmake-build-*/
+/artifacts/build-feasibility/
+/out/
+/dist/
+/bin/
+/bin-*/
+/artifacts/
+
+# CMake and generated build metadata
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/CTestTestfile.cmake
+/Makefile
+!/Makefile
+/compile_commands.json
+/CMakeUserPresets.json
+
+# Logs and runtime output
+*.log
+/logs/
+/log/
+
+# Crash dumps and core files
+*.core
+core
+core.*
+*.dmp
+*.crash
+*.stackdump
+
+# Local runtime configuration
+*.local
+*.user
+*.userossc
+*.autosave
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# Shader caches and GPU runtime caches
+*.cache
+*.cache/
+.shadercache/
+shadercache/
+shader_cache/
+vkcache/
+vk-cache/
+
+# Emulator data and protected media
+/bios/
+/BIOS/
+/roms/
+/ROMs/
+/rom/
+/ROM/
+/isos/
+/ISO/
+/chd/
+/CHD/
+/memcards/
+/memorycards/
+/saves/
+/savestates/
+
+# Local benchmark / profiling artifacts
+perf.data*
+*.perf
+*.jitdump
+*.profraw
+*.profdata
+callgrind.out.*
+
+# Editor and OS noise
+*~
+Thumbs.db
+.DS_Store
+/games/

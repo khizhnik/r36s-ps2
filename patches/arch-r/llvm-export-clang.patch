@@ -1,0 +1,24 @@
+diff --git a/projects/ArchR/packages/lang/llvm/package.mk b/projects/ArchR/packages/lang/llvm/package.mk
+index 2d0f4e3..0000000 100644
+--- a/projects/ArchR/packages/lang/llvm/package.mk
++++ b/projects/ArchR/packages/lang/llvm/package.mk
+@@ -30,6 +30,7 @@ PKG_CMAKE_OPTS_COMMON="-DLLVM_INCLUDE_TOOLS=ON \
+                        -DLLVM_ENABLE_Z3_SOLVER=OFF \
+                        -DLLVM_SPIRV_INCLUDE_TESTS=OFF \
++                       -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+                        -DCMAKE_SKIP_RPATH=ON"
+@@ -115,8 +116,13 @@ post_make_host() {
+ 
+ post_makeinstall_host() {
+   mkdir -p ${TOOLCHAIN}/bin
++    cp -a bin/clang* ${TOOLCHAIN}/bin
+     cp -a bin/llvm-config ${TOOLCHAIN}/bin
+     cp -a bin/llvm-objcopy ${TOOLCHAIN}/bin
+     cp -a bin/llvm-tblgen ${TOOLCHAIN}/bin
++  mkdir -p ${TOOLCHAIN}/lib
++    cp -a lib/libLLVM*.so* ${TOOLCHAIN}/lib 2>/dev/null || true
++    cp -a lib/libclang*.so* ${TOOLCHAIN}/lib 2>/dev/null || true
++    cp -a lib/clang ${TOOLCHAIN}/lib 2>/dev/null || true
+ 
+   if listcontains "${GRAPHIC_DRIVERS}" "iris"; then
+     cp -a bin/{llvm-as,llvm-link,llvm-spirv,opt} "${TOOLCHAIN}/bin"

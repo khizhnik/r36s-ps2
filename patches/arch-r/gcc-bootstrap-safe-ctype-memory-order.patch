@@ -1,0 +1,40 @@
+From 1f8d5b3d3c1e6f9f0bdf8f8d3bf3f0d4a9c1b234 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.com>
+Date: Tue, 28 Jul 2026 00:00:00 +0000
+Subject: [PATCH] gcc: include <memory> before safe-ctype poisoning
+
+Bootstrapping GCC 14.2.0 under Arch-R's Docker build environment with
+the host libstdc++ 16 headers exposes macro collisions between
+safe-ctype.h and the C++ locale headers pulled in by <memory>.
+
+system.h already includes the other C++ standard headers before
+safe-ctype.h, so move <memory> into that early C++ block as well.
+That keeps the bootstrap build behavior unchanged while avoiding the
+ctype macro poisoning in libstdc++ headers.
+---
+ gcc/system.h | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/gcc/system.h b/gcc/system.h
+--- a/gcc/system.h
++++ b/gcc/system.h
+@@ -227,6 +227,9 @@
+ # include <new>
+ # include <utility>
+ # include <type_traits>
++#ifdef INCLUDE_MEMORY
++# include <memory>
++#endif
+ #endif
+ 
+ /* There are an extraordinary number of issues with <ctype.h>.
+@@ -762,9 +765,6 @@
+    namespace, e.g. "_VSTD::abort();", which fails after we use the
+    preprocessor to redefine "abort" as "fancy_abort" below.  */
+ 
+-#ifdef INCLUDE_MEMORY
+-# include <memory>
+-#endif
+ 
+ #ifdef INCLUDE_MUTEX
+ # include <mutex>
