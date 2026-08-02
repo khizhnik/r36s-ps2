@@ -23,6 +23,7 @@ exec > >(tee -a "$orchestrator_log") 2>&1
 target_root="/storage/ports/pcsx2-sdl-r36s-diag"
 target_log_dir="${target_root}/logs/research-mode-${timestamp}"
 gdb_log="${run_dir}/gdb-batch.log"
+bootstrap_only="${BOOTSTRAP_ONLY:-0}"
 dry_run="${DRY_RUN:-0}"
 
 remote_proc_helpers='
@@ -274,10 +275,16 @@ if is_start_es; then
 else
   echo absent
 fi
-printf 'gdb: '
+printf 'gdb_process: '
 ! pgrep -x gdb >/dev/null 2>&1 && echo absent || { echo present; exit 1; }
-printf 'armsx2-sdl: '
+printf 'gdb_executable: '
+command -v gdb >/dev/null 2>&1 && command -v gdb || { echo absent; exit 1; }
+printf 'armsx2_sdl_process: '
 ! pgrep -f '/storage/ports/pcsx2-sdl-r36s-diag/bin/armsx2-sdl' >/dev/null 2>&1 && echo absent || { echo present; exit 1; }
+printf 'armsx2_sdl_executable: '
+test -x /storage/ports/pcsx2-sdl-r36s-diag/bin/armsx2-sdl && echo present || { echo absent; exit 1; }
+ls -l /storage/ports/pcsx2-sdl-r36s-diag/bin/armsx2-sdl
+sha256sum /storage/ports/pcsx2-sdl-r36s-diag/bin/armsx2-sdl
 printf 'essway.service enabled: '
 if enabled_state="$(systemctl is-enabled essway.service 2>&1)"; then
   printf '%s\n' "$enabled_state"
@@ -335,12 +342,16 @@ fi
 
 printf 'Running target-side gdb batch capture...\n'
 set +e
-cat <<'REMOTE' | "$connect" sh -s -- "$target_log_dir" "$gdb_log"
+{
+  printf 'BOOTSTRAP_ONLY=%s\n' "$bootstrap_only"
+  cat <<'REMOTE'
 set -eu
 target_log_dir="$1"
 gdb_log="$2"
 gdb_status_file="${target_log_dir}/gdb-status.txt"
 timeout_status_file="${target_log_dir}/timeout-status.txt"
+bootstrap_only="${BOOTSTRAP_ONLY:-0}"
+persistent_iso_source="/storage/ports/pcsx2-eerunner-smoke/.config/ARMSX2/discs/Grand Theft Auto - Vice City (Europe) (En,Fr,De,Es,It) (v3.00).iso"
 cd /storage/ports/pcsx2-sdl-r36s-diag
 mkdir -p "$target_log_dir"
 export HOME=/storage/ports/pcsx2-sdl-r36s-diag/home
@@ -357,10 +368,63 @@ export LD_LIBRARY_PATH=/storage/ports/pcsx2-sdl-r36s-diag/lib
 export MESA_NO_ERROR=1
 export MESA_SHADER_CACHE_DIR=/var/cache/mesa
 export MESA_SHADER_CACHE_MAX_SIZE=128MB
+set +e
+bootstrap_early_log="${target_log_dir}/bootstrap-early.log"
+bootstrap_log="${target_log_dir}/bootstrap.log"
+: >"$bootstrap_early_log"
+{
+  printf 'initial_pwd=%s\n' "$(pwd)"
+  printf 'arg1=%s\n' "$1"
+  printf 'arg2=%s\n' "$2"
+  printf 'BOOTSTRAP_ONLY=%s\n' "$bootstrap_only"
+  cd /storage/ports/pcsx2-sdl-r36s-diag
+  printf 'cd_result=%s\n' "$?"
+  printf 'pwd_after_cd=%s\n' "$(pwd)"
+  mkdir -p "$target_log_dir"
+  printf 'target_log_dir_result=%s\n' "$?"
+  printf 'gdb_executable=%s\n' "$(command -v gdb 2>/dev/null || true)"
+  printf 'gdb_version=%s\n' "$(gdb --version | head -1)"
+  test -x ./bin/armsx2-sdl
+  printf 'test_x_armsx2_sdl_rc=%s\n' "$?"
+  ls -l ./bin/armsx2-sdl
+  printf 'persistent_iso_source=%s\n' "$persistent_iso_source"
+  test -e "$persistent_iso_source"
+  printf 'persistent_iso_source_rc=%s\n' "$?"
+  printf 'persistent_iso_source_exists=%s\n' "$(test -e "$persistent_iso_source" && echo present || echo absent)"
+} >>"$bootstrap_early_log" 2>&1
+if ! test -e /tmp/vicecity.iso || ! test -r /tmp/vicecity.iso; then
+  if test -e "$persistent_iso_source"; then
+    ln -sfn "$persistent_iso_source" /tmp/vicecity.iso
+    {
+      printf 'recreated_tmp_vicecity_iso='
+      ls -l /tmp/vicecity.iso
+      printf 'recreated_tmp_vicecity_iso_readable='
+      test -r /tmp/vicecity.iso
+      printf 'rc=%s\n' "$?"
+      printf 'recreated_tmp_vicecity_iso_resolved='
+      readlink -f /tmp/vicecity.iso
+    } >>"$bootstrap_early_log" 2>&1
+  fi
+fi
+if [ "$bootstrap_only" = 1 ]; then
+  bootstrap_log="${target_log_dir}/bootstrap.log"
+  cp "$bootstrap_early_log" "$bootstrap_log"
+  {
+    printf 'gdb_executable=%s\n' "$(command -v gdb)"
+    printf 'armsx2_sdl_executable=%s\n' "$(test -x ./bin/armsx2-sdl && echo present || echo absent)"
+    printf 'vicecity_iso_source=%s\n' "$(test -e "$persistent_iso_source" && echo present || echo absent)"
+    printf '/tmp/vicecity.iso=%s\n' "$(test -r /tmp/vicecity.iso && echo recreated and readable || echo missing)"
+    printf 'READY_TO_LAUNCH_GDB\n'
+  } >>"$bootstrap_log" 2>&1
+  printf '%s\n' 0 >"$gdb_status_file"
+  printf '%s\n' 0 >"$timeout_status_file"
+  exit 0
+fi
+set -e
+set +e
 command -v gdb >/dev/null 2>&1
 test -x ./bin/armsx2-sdl
 test -r /tmp/vicecity.iso
-set +e
 timeout 180s sh -c '
   set -eu
   gdb_log="$1"
@@ -407,6 +471,7 @@ else
   printf 'gdb log missing or empty on target\n'
 fi
 REMOTE
+} | "$connect" sh -s -- "$target_log_dir" "$gdb_log"
 ssh_pipeline_status=("${PIPESTATUS[@]}")
 ssh_status="${ssh_pipeline_status[1]:-${ssh_pipeline_status[0]}}"
 set -e
