@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 REPO_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
-.PHONY: build-sdl3-wayland-r36s build-pcsx2-sdl-r36s package-pcsx2-sdl-r36s deploy-pcsx2-sdl-r36s run-pcsx2-sdl-r36s test-pcsx2-sdl-r36s connect-r36s
+.PHONY: build-sdl3-wayland-r36s build-pcsx2-sdl-r36s package-pcsx2-sdl-r36s deploy-pcsx2-sdl-r36s run-pcsx2-sdl-r36s test-pcsx2-sdl-r36s research-mode-pcsx2-sdl-r36s connect-r36s
 
 build-sdl3-wayland-r36s:
 	@set -euo pipefail; \
@@ -33,6 +33,9 @@ test-pcsx2-sdl-r36s:
 	set +e; tools/run-pcsx2-sdl-r36s.sh; status=$$?; set -e; \
 	[[ "$$status" -eq 134 ]] || { printf 'unexpected run exit status: %s (expected 134)\n' "$$status" >&2; exit 1; }; \
 	tools/validate-pcsx2-sdl-r36s-run.sh '$(REPO_ROOT)/artifacts/pcsx2-sdl-r36s-graphical-run/latest' 6
+
+research-mode-pcsx2-sdl-r36s:
+	@tools/research-mode-pcsx2-sdl-r36s.sh
 
 connect-r36s:
 	@tools/connect-r36s-wifi.sh
