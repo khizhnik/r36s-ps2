@@ -435,20 +435,27 @@ timeout 180s sh -c '
     -ex "set breakpoint pending on" \
     -ex "handle SIGSEGV nostop noprint pass" \
     -ex "handle SIGBUS nostop noprint pass" \
-    -ex "handle SIGABRT stop print pass" \
+    -ex "handle SIGILL stop print nopass" \
+    -ex "handle SIGABRT stop print nopass" \
     -ex "break CrashHandler::CrashSignalHandler" \
     -ex "run /tmp/vicecity.iso" \
-    -ex "bt 10" \
+    -ex "frame 0" \
     -ex "info args" \
+    -ex "print signal" \
+    -ex "print *siginfo" \
     -ex "set \$uc = (ucontext_t*)ctx" \
-    -ex "printf \"signal=%d\\n\", signal" \
-    -ex "printf \"siginfo->si_code=%d\\n\", siginfo->si_code" \
-    -ex "printf \"siginfo->si_addr=%p\\n\", siginfo->si_addr" \
-    -ex "printf \"ucontext_pc=%p\\n\", (void*)\$uc->uc_mcontext.pc" \
-    -ex "printf \"ucontext_lr=%p\\n\", (void*)\$uc->uc_mcontext.regs[30]" \
-    -ex "printf \"ucontext_sp=%p\\n\", (void*)\$uc->uc_mcontext.sp" \
-    -ex "x/12i \$uc->uc_mcontext.pc-24" \
+    -ex "print/x \$uc->uc_mcontext.pc" \
+    -ex "print/x \$uc->uc_mcontext.sp" \
+    -ex "print/x \$uc->uc_mcontext.regs[30]" \
+    -ex "print/x \$uc->uc_mcontext.regs[0]" \
+    -ex "print/x \$uc->uc_mcontext.regs[1]" \
+    -ex "print/x \$uc->uc_mcontext.regs[19]" \
+    -ex "print/x \$uc->uc_mcontext.regs[20]" \
+    -ex "print/x \$uc->uc_mcontext.regs[24]" \
+    -ex "x/16i \$uc->uc_mcontext.pc-32" \
     -ex "info symbol \$uc->uc_mcontext.pc" \
+    -ex "bt 15" \
+    -ex "quit" \
     ./bin/armsx2-sdl >"$gdb_log" 2>&1
   gdb_status=$?
   printf "%s\n" "$gdb_status" >"$gdb_status_file"
@@ -463,15 +470,15 @@ else
 fi
 printf '%s\n' "$timeout_status" >"$timeout_status_file"
 printf 'gdb exit status: %s\n' "$gdb_status"
-printf 'timeout exit status: %s\n' "$timeout_status"
-printf 'gdb log: %s\n' "$gdb_log"
-if [[ -s "$gdb_log" ]]; then
-  tail -n 80 "$gdb_log"
-else
-  printf 'gdb log missing or empty on target\n'
-fi
+  printf 'timeout exit status: %s\n' "$timeout_status"
+  printf 'gdb log: %s\n' "$gdb_log"
+  if [[ -s "$gdb_log" ]]; then
+    tail -n 80 "$gdb_log"
+  else
+    printf 'gdb log missing or empty on target\n'
+  fi
 REMOTE
-} | "$connect" sh -s -- "$target_log_dir" "$gdb_log"
+} | "$connect" sh -s -- "$target_log_dir" "$target_log_dir/gdb-batch.log"
 ssh_pipeline_status=("${PIPESTATUS[@]}")
 ssh_status="${ssh_pipeline_status[1]:-${ssh_pipeline_status[0]}}"
 set -e
