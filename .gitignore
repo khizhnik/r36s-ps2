@@ -91,3 +91,5 @@ Thumbs.db
 /deploy/pcsx2-sdl-r36s-diag/lib/libmali.so.1.9.0
 /deploy/r36s-recompiler-tests-cortex-a35-smoke/host-isa-scan.txt
 /deploy/sdl3-wayland-smoke/lib/libmali-hook.so.1.9.0
+
+/research/upstream/
