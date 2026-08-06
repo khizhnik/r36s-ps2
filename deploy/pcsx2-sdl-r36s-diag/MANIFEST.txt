@@ -1,5 +1,5 @@
 path	type	size	sha256	symlink_target
-bin/armsx2-sdl	file	159402712	3b2e89ccc84a6dc4cab6fd8db31cb8185455d33957f0ef065b4e95ff877e8d7c	-
+bin/armsx2-sdl	file	159438432	dc0c38f44c07bd097ac282a3c8cf593f5286baf0de26b83bc7fd98dbaf5281f6	-
 diagnostic.sh	file	448	93971f7f6053aecbc747877e5dd874f1837ad535e9711ed982ec449dfcae90d3	-
 launch.sh	file	182	5cce828bb24e7820e1451280212686fcddce4b1d77ab91fd3190992b82f2f2d9	-
 lib/libEGL.so	symlink	11	-	libEGL.so.1
